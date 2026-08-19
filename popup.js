@@ -1,6 +1,7 @@
 const CLEANUP_MODES = {
   SAFE: 'safe',
-  REMOVE: 'remove'
+  REMOVE: 'remove',
+  VIRTUAL: 'virtual'
 };
 
 const FEEDBACK_SURVEY_URLS = {
@@ -55,6 +56,19 @@ function setSelectedMode(cleanupMode) {
   if (input) {
     input.checked = true;
   }
+  updateModeApplicability();
+}
+
+function updateModeApplicability() {
+  const isVirtual = getSelectedMode() === CLEANUP_MODES.VIRTUAL;
+  const keepRounds = document.getElementById('keepRounds');
+  const autoMaintain = document.getElementById('autoMaintain');
+  const section = document.getElementById('roundSettings');
+  const hint = document.getElementById('virtualModeHint');
+  keepRounds.disabled = isVirtual;
+  autoMaintain.disabled = isVirtual;
+  section.dataset.modeDisabled = String(isVirtual);
+  hint.hidden = !isVirtual;
 }
 
 function readSettingsFromForm() {
@@ -110,7 +124,10 @@ async function openFeatureFeedbackSurvey() {
 
 async function saveSettings() {
   const settings = readSettingsFromForm();
-  if (settings.keepRounds < 1 || settings.keepRounds > 100 || Number.isNaN(settings.keepRounds)) {
+  if (
+    settings.cleanupMode !== CLEANUP_MODES.VIRTUAL &&
+    (settings.keepRounds < 1 || settings.keepRounds > 100 || Number.isNaN(settings.keepRounds))
+  ) {
     showStatus(getMessage('errorKeepRoundsRange'), 'error');
     return null;
   }
@@ -129,6 +146,7 @@ async function notifyAutoMaintainChange(settings = readSettingsFromForm()) {
     url: ['https://chat.openai.com/*', 'https://chatgpt.com/*']
   });
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  let activeResponse = null;
 
   for (const tab of tabs) {
     try {
@@ -138,13 +156,15 @@ async function notifyAutoMaintainChange(settings = readSettingsFromForm()) {
         keepRounds: settings.keepRounds,
         cleanupMode: settings.cleanupMode
       });
-      if (tab.id === activeTab?.id && response?.stats) {
-        setCurrentRoundsDisplay(response.stats);
+      if (tab.id === activeTab?.id) {
+        activeResponse = response;
+        if (response?.stats) setCurrentRoundsDisplay(response.stats);
       }
     } catch (e) {
       // The tab may not have loaded the content script yet.
     }
   }
+  return activeResponse;
 }
 
 loadSettings();
@@ -185,16 +205,31 @@ function updateViewMetrics(stats) {
   const visibleEl = document.getElementById('visibleRounds');
   const optimizedEl = document.getElementById('optimizedRounds');
   const reductionEl = document.getElementById('domReduction');
+  const visibleLabelEl = document.getElementById('visibleMetricLabel');
+  const optimizedLabelEl = document.getElementById('optimizedMetricLabel');
+  const reductionLabelEl = document.getElementById('reductionMetricLabel');
   if (!cardEl || !visibleEl || !optimizedEl || !reductionEl) return;
 
-  const visible = stats?.visibleRounds || 0;
-  const total = stats?.totalRounds || visible;
+  const virtualization = stats?.virtualization;
+  const isVirtual = Boolean(virtualization?.enabled);
+  const visible = isVirtual
+    ? (virtualization.activeTurns || 0) + (virtualization.warmTurns || 0)
+    : stats?.visibleRounds || 0;
+  const total = isVirtual ? virtualization.registeredTurns || 0 : stats?.totalRounds || visible;
   cardEl.dataset.empty = String(total <= 0);
   const optimized = Math.max(0, total - visible);
   const reduction = total > 0 ? Math.round((optimized / total) * 100) : 0;
 
-  visibleEl.textContent = getMessage('visibleRoundsValue', [String(visible), String(total)]);
-  optimizedEl.textContent = getMessage('optimizedRoundsValue', [String(optimized)]);
+  visibleLabelEl.textContent = getMessage(isVirtual ? 'virtualRenderedTurnsLabel' : 'visibleRoundsLabel');
+  optimizedLabelEl.textContent = getMessage(isVirtual ? 'virtualFrozenTurnsLabel' : 'optimizedRoundsLabel');
+  reductionLabelEl.textContent = getMessage(isVirtual ? 'virtualFrozenRatioLabel' : 'domReductionLabel');
+
+  visibleEl.textContent = isVirtual
+    ? getMessage('virtualRenderedTurnsValue', [String(visible), String(total)])
+    : getMessage('visibleRoundsValue', [String(visible), String(total)]);
+  optimizedEl.textContent = isVirtual
+    ? getMessage('virtualFrozenTurnsValue', [String(optimized)])
+    : getMessage('optimizedRoundsValue', [String(optimized)]);
   reductionEl.textContent = `${reduction}%`;
 }
 
@@ -204,11 +239,17 @@ async function saveAndNotifyIfNeeded(showModeStatus = false) {
   const settings = await saveSettings();
   if (!settings) return null;
 
-  await notifyAutoMaintainChange(settings);
+  const response = await notifyAutoMaintainChange(settings);
 
   if (showModeStatus) {
+    if (response?.success === false) {
+      showStatus(response.message || getMessage('errorOperationFailedRetry'), 'error');
+      return settings;
+    }
     const statusKey = settings.cleanupMode === CLEANUP_MODES.REMOVE
-        ? 'removeModeSelected'
+      ? 'removeModeSelected'
+      : settings.cleanupMode === CLEANUP_MODES.VIRTUAL
+        ? 'virtualModeSelected'
         : 'safeModeSelected';
     showStatus(getMessage(statusKey), 'info');
   }
@@ -226,6 +267,7 @@ document.getElementById('keepRounds').addEventListener('change', async () => {
 
 document.querySelectorAll('input[name="cleanupMode"]').forEach((input) => {
   input.addEventListener('change', () => {
+    updateModeApplicability();
     saveAndNotifyIfNeeded(true);
   });
 });

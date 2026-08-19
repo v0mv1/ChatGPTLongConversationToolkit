@@ -22,7 +22,7 @@
         "https://chat.openai.com/*",
         "https://chatgpt.com/*"
       ],
-      "js": ["content.js"],
+      "js": ["virtualizer.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

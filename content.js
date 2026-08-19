@@ -2,14 +2,17 @@
 
 const CLEANUP_MODES = {
   SAFE: 'safe',
-  REMOVE: 'remove'
+  REMOVE: 'remove',
+  VIRTUAL: 'virtual'
 };
 
 let autoMaintainEnabled = false;
 let autoMaintainKeepRounds = 10;
 let cleanupModeEnabled = CLEANUP_MODES.SAFE;
+let modeTransitionVersion = 0;
 let advancedToolsEnabled = false;
-let observer = null;
+let debugModeEnabled = false;
+let performanceVirtualizer = null;
 let cleanupTimer = null;
 let badgeTimer = null;
 let domCheckTimer = null;
@@ -30,8 +33,13 @@ let conversationPanelState = {
 let activeJumpToken = 0;
 let activeHighlightTimer = null;
 let searchDebounceTimer = null;
+let advancedEnhancementTimer = null;
+let mutationUiRefreshFrame = null;
+let panelRefreshFrame = null;
+const pendingEnhancementTurns = new Map();
 let navigatorRevealedTurn = null;
 let loadedBookmarksConversationId = '';
+let observedConversationId = '';
 let extensionContextInvalidated = false;
 const bookmarkBubbleSlots = new WeakMap();
 const bookmarkBubbleResizeObserver = typeof ResizeObserver === 'function'
@@ -194,7 +202,7 @@ function stripTurnRoleLabel(text) {
 
 function getTurnHeadings(turnEl) {
   return Array.from(turnEl.querySelectorAll('h1, h2, h3, h4'))
-    .map((heading) => (heading.innerText || heading.textContent || '').replace(/\s+/g, ' ').trim())
+    .map((heading) => (heading.textContent || '').replace(/\s+/g, ' ').trim())
     .filter(Boolean)
     .slice(0, 5);
 }
@@ -205,7 +213,7 @@ function getCodeMarkers(turnEl) {
       const language = codeEl.getAttribute('data-language') ||
         codeEl.className?.match(/language-([a-z0-9_-]+)/i)?.[1] ||
         '';
-      const text = (codeEl.innerText || codeEl.textContent || '').trim();
+      const text = (codeEl.textContent || '').trim();
       return language || text.split('\n')[0]?.slice(0, 40) || 'Code block';
     })
     .filter(Boolean)
@@ -214,29 +222,33 @@ function getCodeMarkers(turnEl) {
 
 function buildMessageExtractor() {
   const turns = findTurnElements();
-  return turns.map((turnEl, index) => {
-    const role = detectTurnRole(turnEl);
-    const text = getTurnText(turnEl);
-    const headings = getTurnHeadings(turnEl);
-    const codeMarkers = getCodeMarkers(turnEl);
-    const imageCount = turnEl.querySelectorAll('img, picture, video').length;
+  return turns
+    .map((turnEl, index) => buildMessageRecord(turnEl, index))
+    .filter(Boolean);
+}
 
-    return {
-      id: getTurnId(turnEl, index),
-      index,
-      role,
-      text,
-      preview: text.slice(0, 180),
-      anchor: turnEl,
-      isHidden: turnEl.dataset.chcHidden === 'true',
-      markers: {
-        headings,
-        codeMarkers,
-        imageCount,
-        hasQuestion: role === 'user' && /[?？]\s*$/.test(text)
-      }
-    };
-  }).filter((message) => message.text || message.markers.headings.length || message.markers.codeMarkers.length || message.markers.imageCount);
+function buildMessageRecord(turnEl, index) {
+  const role = detectTurnRole(turnEl);
+  const text = getTurnText(turnEl);
+  const headings = getTurnHeadings(turnEl);
+  const codeMarkers = getCodeMarkers(turnEl);
+  const imageCount = turnEl.querySelectorAll('img, picture, video').length;
+  const message = {
+    id: getTurnId(turnEl, index),
+    index,
+    role,
+    text,
+    preview: text.slice(0, 180),
+    anchor: turnEl,
+    isHidden: turnEl.dataset.chcHidden === 'true',
+    markers: {
+      headings,
+      codeMarkers,
+      imageCount,
+      hasQuestion: role === 'user' && /[?？]\s*$/.test(text)
+    }
+  };
+  return message.text || headings.length || codeMarkers.length || imageCount ? message : null;
 }
 
 function getConversationId() {
@@ -331,34 +343,40 @@ function ensureBookmarkButtons() {
     return;
   }
   ensureConversationPanelStyles();
-  buildMessageExtractor().forEach((message) => {
-    if (message.role !== 'user' && message.role !== 'assistant') return;
-    const anchor = findMessageAnchor(message);
-    if (!anchor) return;
-    if (!message.text && message.markers.imageCount > 0) {
-      anchor.querySelector('.chc-bookmark-slot')?.remove();
-      return;
-    }
-    const slot = ensureBookmarkSlot(anchor, message.role);
-    const existingButton = anchor.querySelector('.chc-bookmark-button');
-    if (existingButton) {
-      if (existingButton.parentElement !== slot) {
-        slot.appendChild(existingButton);
-      }
-      return;
-    }
-    const button = document.createElement('button');
-    button.className = 'chc-bookmark-button';
-    button.type = 'button';
-    button.dataset.messageId = message.id;
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleMessageBookmark(message).catch(() => {});
-    });
-    slot.appendChild(button);
-  });
+  buildMessageExtractor().forEach(ensureBookmarkButtonForMessage);
   syncBookmarkButtons();
+}
+
+function ensureBookmarkButtonForMessage(message) {
+  if (!message || (message.role !== 'user' && message.role !== 'assistant')) return;
+  const anchor = message.anchor || findMessageAnchor(message);
+  if (!anchor) return;
+  if (performanceVirtualizer?.enabled && !performanceVirtualizer.isTurnRenderedForEnhancement(anchor)) {
+    anchor.querySelector('.chc-bookmark-slot')?.remove();
+    return;
+  }
+  if (!message.text && message.markers.imageCount > 0) {
+    anchor.querySelector('.chc-bookmark-slot')?.remove();
+    return;
+  }
+  const slot = ensureBookmarkSlot(anchor, message.role);
+  const existingButton = anchor.querySelector('.chc-bookmark-button');
+  if (existingButton) {
+    if (existingButton.parentElement !== slot) {
+      slot.appendChild(existingButton);
+    }
+    return;
+  }
+  const button = document.createElement('button');
+  button.className = 'chc-bookmark-button';
+  button.type = 'button';
+  button.dataset.messageId = message.id;
+  button.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleMessageBookmark(message).catch(() => {});
+  });
+  slot.appendChild(button);
 }
 
 function removeBookmarkButtons() {
@@ -415,7 +433,7 @@ function findUserMessageBubble(messageContainer) {
       background !== 'transparent' &&
       background !== 'rgba(0, 0, 0, 0)';
     const radius = parseFloat(style.borderTopLeftRadius) || 0;
-    return hasBackground && radius >= 12 && (element.innerText || '').trim();
+    return hasBackground && radius >= 12 && (element.textContent || '').trim();
   });
 
   return candidates.sort((a, b) => {
@@ -469,6 +487,25 @@ function refreshBookmarkContext() {
   ensureBookmarkButtons();
 }
 
+function scheduleAdvancedEnhancementRefresh(state) {
+  if (!advancedToolsEnabled || !state?.element) return;
+  pendingEnhancementTurns.set(state.element, state.index);
+  if (advancedEnhancementTimer) return;
+  advancedEnhancementTimer = setTimeout(() => {
+    advancedEnhancementTimer = null;
+    const pending = Array.from(pendingEnhancementTurns.entries());
+    pendingEnhancementTurns.clear();
+    pending.forEach(([turn, index]) => {
+      if (!turn.isConnected || !performanceVirtualizer?.isTurnRenderedForEnhancement(turn)) {
+        turn.querySelector('.chc-bookmark-slot')?.remove();
+        return;
+      }
+      ensureBookmarkButtonForMessage(buildMessageRecord(turn, index));
+    });
+    syncBookmarkButtons();
+  }, 150);
+}
+
 function syncBookmarkButtons() {
   if (!advancedToolsEnabled) {
     removeBookmarkButtons();
@@ -508,9 +545,11 @@ function getPlaceholderHiddenRounds() {
 
 function getRoundStats() {
   const visibleRounds = countConversationRounds(getVisibleTurnElements());
+  const virtualization = performanceVirtualizer?.getStats() || null;
   return {
     visibleRounds,
-    totalRounds: visibleRounds + getPlaceholderHiddenRounds()
+    totalRounds: visibleRounds + getPlaceholderHiddenRounds(),
+    virtualization
   };
 }
 
@@ -608,7 +647,102 @@ function clearHiddenLayoutContainers() {
 }
 
 function getScrollRoot() {
-  return document.scrollingElement || document.documentElement;
+  return globalThis.__CHC_VIRTUALIZATION__?.getConversationScrollRoot(findThread()) ||
+    document.scrollingElement ||
+    document.documentElement;
+}
+
+function isStreamingTurn(turnEl, index, turns) {
+  if (index !== turns.length - 1 || detectTurnRole(turnEl) !== 'assistant') return false;
+  const stopButton = document.querySelector(
+    '[data-testid="stop-button"], button[aria-label*="Stop generating"], button[aria-label*="停止生成"]'
+  );
+  return Boolean(stopButton);
+}
+
+function ensurePerformanceVirtualizer() {
+  if (performanceVirtualizer || !globalThis.__CHC_VIRTUALIZATION__?.create) {
+    return performanceVirtualizer;
+  }
+  performanceVirtualizer = globalThis.__CHC_VIRTUALIZATION__.create({
+    findThread,
+    findTurnElements,
+    getTurnId,
+    getTurnRole: detectTurnRole,
+    getConversationId,
+    getTurnLayoutElement: getSafeTurnLayoutElement,
+    isStreamingTurn,
+    onRenderStateChange: scheduleAdvancedEnhancementRefresh,
+    onStatsChange: scheduleBadgeUpdate
+  });
+  performanceVirtualizer.init({ debug: debugModeEnabled });
+  return performanceVirtualizer;
+}
+
+function disablePerformanceVirtualization() {
+  performanceVirtualizer?.disable();
+}
+
+async function enablePerformanceVirtualization(expectedVersion = null) {
+  if (expectedVersion !== null && expectedVersion !== modeTransitionVersion) {
+    return { success: false, message: 'Virtualization transition superseded.', stats: getRoundStats() };
+  }
+  await new SafeDomStore().restore(Number.MAX_SAFE_INTEGER);
+  if (expectedVersion !== null && expectedVersion !== modeTransitionVersion) {
+    return { success: false, message: 'Virtualization transition superseded.', stats: getRoundStats() };
+  }
+  clearHiddenLayoutContainers();
+  const virtualizer = ensurePerformanceVirtualizer();
+  if (!virtualizer?.enable()) {
+    const reason = virtualizer?.getStats().unsupportedReason || 'virtualizer-module-unavailable';
+    return {
+      success: false,
+      message: getMessage('virtualModeUnsupported', [reason]) ||
+        `Performance Virtualization is unavailable (${reason}).`,
+      stats: getRoundStats()
+    };
+  }
+  virtualizer.refresh();
+  scheduleBadgeUpdate();
+  return {
+    success: true,
+    message: getMessage('virtualModeApplied') || 'Performance Virtualization enabled.',
+    stats: getRoundStats()
+  };
+}
+
+function describeDiagnosticElement(element) {
+  if (!element) return null;
+  const id = element.id ? `#${element.id}` : '';
+  const testId = element.getAttribute?.('data-testid');
+  return `${element.tagName?.toLowerCase() || 'element'}${id}${testId ? `[data-testid="${testId}"]` : ''}`;
+}
+
+function runPerformanceDiagnostic() {
+  const diagnostic = ensurePerformanceVirtualizer()?.getDiagnostic() || {
+    enabled: false,
+    reason: 'virtualizer-module-unavailable'
+  };
+  console.info('[ChatGPT Conversation Toolkit] Performance diagnostic', diagnostic);
+  if (Array.isArray(diagnostic.loadedTurns)) {
+    console.table(diagnostic.loadedTurns);
+  }
+  return {
+    ...diagnostic,
+    threadElement: describeDiagnosticElement(diagnostic.threadElement),
+    scrollRoot: describeDiagnosticElement(diagnostic.scrollRoot)
+  };
+}
+
+function updateDebugApi() {
+  if (!debugModeEnabled) {
+    delete globalThis.__CHC_DEBUG__;
+    return;
+  }
+  globalThis.__CHC_DEBUG__ = Object.freeze({
+    diagnose: runPerformanceDiagnostic,
+    getVirtualizationStats: () => ensurePerformanceVirtualizer()?.getStats() || null
+  });
 }
 
 function withScrollRestoreProtection(task) {
@@ -617,8 +751,9 @@ function withScrollRestoreProtection(task) {
   const protectedElements = [
     document.documentElement,
     document.body,
-    findThread()
-  ].filter(Boolean);
+    findThread(),
+    scrollRoot
+  ].filter((element, index, all) => Boolean(element) && all.indexOf(element) === index);
   const previousOverflowAnchors = protectedElements.map((element) => element.style.overflowAnchor);
 
   if (restoreProtectionTimer) {
@@ -899,6 +1034,9 @@ class NullStore {
 
 function createStore(mode) {
   if (mode === CLEANUP_MODES.REMOVE) return new NullStore();
+  if (mode === CLEANUP_MODES.VIRTUAL) {
+    throw new Error('Performance Virtualization does not use the DOM store abstraction.');
+  }
   return new SafeDomStore();
 }
 
@@ -921,6 +1059,12 @@ function enqueueReconcile(task) {
 async function reconcileConversationUnlocked(keepRounds, cleanupMode) {
   const mode = Object.values(CLEANUP_MODES).includes(cleanupMode) ? cleanupMode : CLEANUP_MODES.SAFE;
   await restoreForeignRecoverableStores(mode);
+
+  if (mode === CLEANUP_MODES.VIRTUAL) {
+    return enablePerformanceVirtualization();
+  }
+
+  disablePerformanceVirtualization();
 
   const store = createStore(mode);
   const hiddenCount = await store.hiddenCount();
@@ -963,6 +1107,9 @@ async function reconcileConversationUnlocked(keepRounds, cleanupMode) {
 }
 
 function getModeResultMessage(mode, stats) {
+  if (mode === CLEANUP_MODES.VIRTUAL) {
+    return getMessage('virtualModeApplied') || 'Performance Virtualization enabled.';
+  }
   const hiddenRounds = Math.max(0, stats.totalRounds - stats.visibleRounds);
   if (stats.totalRounds === stats.visibleRounds) {
     return getMessage('infoNoNeedClean', [stats.visibleRounds.toString()]);
@@ -1061,28 +1208,11 @@ function isTurnRelatedMutation(mutation) {
 }
 
 function startObserver() {
-  if (observer) return;
-  const target = document.documentElement || document.body;
-  if (!target) return;
-
-  observer = new MutationObserver((mutations) => {
-    if (!autoMaintainEnabled) return;
-    for (const mutation of mutations) {
-      if (isTurnRelatedMutation(mutation)) {
-        scheduleAutoCleanup();
-        return;
-      }
-    }
-  });
-
-  observer.observe(target, { childList: true, subtree: true });
+  // Turn mutations are handled by the shared badge/navigation observer.
+  startBadgeObserver();
 }
 
 function stopObserver() {
-  if (observer) {
-    observer.disconnect();
-    observer = null;
-  }
   if (cleanupTimer) {
     clearTimeout(cleanupTimer);
     cleanupTimer = null;
@@ -1092,10 +1222,21 @@ function stopObserver() {
 function updateAutoMaintain(enabled, keepRounds, cleanupMode, runImmediately = false) {
   clearNavigatorReveal();
   const wasEnabled = autoMaintainEnabled;
+  const previousMode = cleanupModeEnabled;
   autoMaintainEnabled = enabled;
   autoMaintainKeepRounds = keepRounds;
   cleanupModeEnabled = Object.values(CLEANUP_MODES).includes(cleanupMode) ? cleanupMode : CLEANUP_MODES.SAFE;
+  const transitionVersion = ++modeTransitionVersion;
   if (wasEnabled !== enabled) refreshPlaceholderInteractivity();
+
+  if (cleanupModeEnabled === CLEANUP_MODES.VIRTUAL) {
+    stopObserver();
+    return enqueueReconcile(() => enablePerformanceVirtualization(transitionVersion));
+  }
+
+  if (previousMode === CLEANUP_MODES.VIRTUAL || performanceVirtualizer?.enabled) {
+    disablePerformanceVirtualization();
+  }
 
   if (enabled) {
     startObserver();
@@ -1617,7 +1758,22 @@ function refreshConversationPanelMessages() {
 
 function scheduleConversationPanelRefresh() {
   if (!conversationPanel || !conversationPanelState.isOpen) return;
-  refreshConversationPanelMessages();
+  if (panelRefreshFrame !== null) return;
+  panelRefreshFrame = setTimeout(() => {
+    panelRefreshFrame = null;
+    if (conversationPanel?.panel.dataset.open === 'true') {
+      refreshConversationPanelMessages();
+    }
+  }, 200);
+}
+
+function scheduleMutationUiRefresh() {
+  if (!advancedToolsEnabled || mutationUiRefreshFrame !== null) return;
+  mutationUiRefreshFrame = setTimeout(() => {
+    mutationUiRefreshFrame = null;
+    refreshBookmarkContext();
+    scheduleConversationPanelRefresh();
+  }, 200);
 }
 
 function removeConversationPanel() {
@@ -1951,9 +2107,12 @@ function navigateSearchResult(delta) {
 async function navigateToCurrentSearchResult() {
   const result = conversationPanelState.results[conversationPanelState.currentResultIndex];
   if (!result) return;
-  if (result.anchor.dataset.chcHidden === 'true') {
+  const anchor = findMessageAnchor(result.message);
+  if (!anchor) return;
+  result.anchor = anchor;
+  if (anchor.dataset.chcHidden === 'true') {
     if (autoMaintainEnabled) {
-      revealHiddenTurnForNavigator(result.anchor);
+      revealHiddenTurnForNavigator(anchor);
       renderConversationPanel();
     } else {
       clearNavigatorReveal();
@@ -1964,7 +2123,7 @@ async function navigateToCurrentSearchResult() {
     clearNavigatorReveal();
   }
   applySearchHighlights();
-  jumpToMessageAnchor(result.anchor);
+  await jumpToMessageAnchor(anchor);
 }
 
 function buildSearchResultSnippet(text, query) {
@@ -2159,7 +2318,7 @@ async function navigateToBookmark(bookmark) {
   } else {
     clearNavigatorReveal();
   }
-  jumpToMessageAnchor(anchor);
+  await jumpToMessageAnchor(anchor);
 }
 
 async function removeBookmark(key) {
@@ -2198,7 +2357,8 @@ function findMessageAnchor(message) {
 }
 
 function suppressScrollAnchoring(duration = 1800) {
-  const elements = [document.documentElement, document.body, findThread()].filter(Boolean);
+  const elements = [document.documentElement, document.body, findThread(), getScrollRoot()]
+    .filter((element, index, all) => Boolean(element) && all.indexOf(element) === index);
   const previous = elements.map((element) => element.style.overflowAnchor);
   elements.forEach((element) => {
     element.style.overflowAnchor = 'none';
@@ -2222,17 +2382,18 @@ function jumpToMessage(message) {
     if (token !== activeJumpToken) return;
     const anchor = findMessageAnchor(message);
     if (!anchor) return;
-    jumpToMessageAnchor(anchor, attempt);
-    if (attempt < 5) {
-      const delay = [80, 160, 280, 460, 720][attempt] || 720;
-      setTimeout(() => run(attempt + 1), delay);
-    }
+    Promise.resolve(jumpToMessageAnchor(anchor, attempt)).finally(() => {
+      if (attempt < 5) {
+        const delay = [80, 160, 280, 460, 720][attempt] || 720;
+        setTimeout(() => run(attempt + 1), delay);
+      }
+    });
   };
 
   run(0);
 }
 
-function jumpToMessageAnchor(anchor, attempt = 0) {
+async function jumpToMessageAnchor(anchor, attempt = 0) {
   if (!anchor) return;
   if (anchor.dataset.chcHidden === 'true' && anchor.dataset.chcNavigatorRevealed !== 'true') {
     const placeholder = getPlaceholderForMode(CLEANUP_MODES.SAFE);
@@ -2241,16 +2402,25 @@ function jumpToMessageAnchor(anchor, attempt = 0) {
       return;
     }
   }
+  if (performanceVirtualizer?.enabled) {
+    await performanceVirtualizer.prepareForNavigation(anchor);
+  }
   anchor.style.scrollMarginTop = '96px';
   anchor.style.scrollMarginBottom = '96px';
   anchor.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'auto' });
 
   const rect = anchor.getBoundingClientRect();
-  const viewportCenter = window.innerHeight / 2;
+  const scrollRoot = getScrollRoot();
+  const isDocumentRoot = scrollRoot === document.scrollingElement ||
+    scrollRoot === document.documentElement ||
+    scrollRoot === document.body;
+  const scrollRootRect = isDocumentRoot ? null : scrollRoot?.getBoundingClientRect();
+  const viewportCenter = isDocumentRoot
+    ? window.innerHeight / 2
+    : (scrollRootRect?.top || 0) + (scrollRoot?.clientHeight || window.innerHeight) / 2;
   const anchorCenter = rect.top + rect.height / 2;
   const delta = anchorCenter - viewportCenter;
   if (attempt > 0 && Math.abs(delta) > 24) {
-    const scrollRoot = getScrollRoot();
     if (scrollRoot) {
       scrollRoot.scrollTop += delta;
     } else {
@@ -2275,16 +2445,30 @@ function startBadgeObserver() {
   if (!target) return;
 
   badgeObserver = new MutationObserver((mutations) => {
-    for (const mutation of mutations) {
-      if (isTurnRelatedMutation(mutation)) {
-        refreshBookmarkContext();
-        scheduleBadgeUpdate();
-        scheduleConversationPanelRefresh();
-        return;
+    const conversationId = getConversationId();
+    const routeChanged = observedConversationId && observedConversationId !== conversationId;
+    observedConversationId = conversationId;
+    const turnRelated = mutations.some(isTurnRelatedMutation);
+
+    if (routeChanged) {
+      clearNavigatorReveal();
+      clearConversationSearch();
+      loadedBookmarksConversationId = '';
+      loadConversationBookmarks().then(() => renderConversationPanel());
+      performanceVirtualizer?.scheduleRefresh();
+    }
+
+    if (turnRelated) {
+      performanceVirtualizer?.handleMutations(mutations);
+      if (autoMaintainEnabled && cleanupModeEnabled !== CLEANUP_MODES.VIRTUAL) {
+        scheduleAutoCleanup();
       }
+      scheduleMutationUiRefresh();
+      scheduleBadgeUpdate();
     }
   });
 
+  observedConversationId = getConversationId();
   badgeObserver.observe(target, { childList: true, subtree: true });
 }
 
@@ -2302,10 +2486,13 @@ async function initAutoMaintain() {
       cleanupMode: CLEANUP_MODES.SAFE,
       collapseOldMessages: true,
       advancedToolsEnabled: false,
-      conversationToolsEnabled: false
+      conversationToolsEnabled: false,
+      debugMode: false
     });
     advancedToolsEnabled = resolveAdvancedToolsEnabled(result);
-    updateAutoMaintain(result.autoMaintain, result.keepRounds, resolveCleanupMode(result));
+    debugModeEnabled = Boolean(result.debugMode);
+    updateDebugApi();
+    await updateAutoMaintain(result.autoMaintain, result.keepRounds, resolveCleanupMode(result));
     await loadConversationBookmarks();
     startBadgeObserver();
     if (advancedToolsEnabled) {
@@ -2342,6 +2529,12 @@ chrome.storage.onChanged.addListener((changes) => {
       removeBookmarkButtons();
       removeConversationPanel();
     }
+  }
+
+  if (changes.debugMode) {
+    debugModeEnabled = Boolean(changes.debugMode.newValue);
+    ensurePerformanceVirtualizer()?.setDebugEnabled(debugModeEnabled);
+    updateDebugApi();
   }
 
   if (changes[BOOKMARKS_STORAGE_KEY]) {
@@ -2385,6 +2578,23 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
   if (request.action === 'getRoundStats') {
     sendResponse({ success: true, stats: getRoundStats() });
+    return true;
+  }
+
+  if (request.action === 'getVirtualizationStats') {
+    sendResponse({
+      success: true,
+      stats: ensurePerformanceVirtualizer()?.getStats() || null
+    });
+    return true;
+  }
+
+  if (request.action === 'runPerformanceDiagnostic') {
+    if (!debugModeEnabled) {
+      sendResponse({ success: false, message: 'Debug mode is disabled.' });
+      return true;
+    }
+    sendResponse({ success: true, diagnostic: runPerformanceDiagnostic() });
     return true;
   }
 
@@ -2436,3 +2646,16 @@ if (document.readyState === 'loading') {
 } else {
   waitForThreadAndInit();
 }
+
+window.addEventListener('pagehide', () => {
+  disablePerformanceVirtualization();
+  delete globalThis.__CHC_DEBUG__;
+});
+
+window.addEventListener('pageshow', (event) => {
+  if (!event.persisted) return;
+  updateDebugApi();
+  if (cleanupModeEnabled === CLEANUP_MODES.VIRTUAL) {
+    enablePerformanceVirtualization().catch(() => {});
+  }
+});

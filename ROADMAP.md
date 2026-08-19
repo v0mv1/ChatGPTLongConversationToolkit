@@ -434,6 +434,19 @@ Done:
 - Built the Conversation Navigator foundation.
 - Built message-level loaded conversation search.
 - Added basic local bookmarks for loaded User and Assistant messages.
+- Added an experimental Performance Virtualization mode for currently mounted turns.
+- Added viewport-distance registration, in-memory height caching, shared IntersectionObserver/ResizeObserver handling, navigation pre-thaw, and debug-only diagnostics.
+
+Performance Virtualization follows the existing boundary:
+
+```text
+ChatGPT owns the mounted DOM structure.
+The extension owns only reversible rendering hints.
+```
+
+It does not detach, clone, replace, or recreate ChatGPT turns. Missing capabilities, invalid heights, or unknown DOM state must fail open. The first implementation intentionally excludes adaptive margins, persistent height caches, React hooks, and document-start early bootstrap.
+
+Before describing the feature as a demonstrated performance improvement, validate it on a real long conversation and compare extension disabled, Visual Hide, Temporary Trim, and Performance Virtualization. Record loaded turns, conversation DOM nodes, Long Task count/total/max duration, active/warm/frozen counts, scroll stability, and cold-open interactivity. Synthetic tests establish mechanism correctness only.
 
 Release boundary:
 
@@ -451,6 +464,7 @@ Immediate actions:
 4. Keep categories, notes, and bookmark management out of v1.4.
 5. Prepare deterministic Outline and local Export work for v1.5.
 6. Evaluate Last Position / Continue Reading as a low-cost navigation improvement.
+7. Benchmark Performance Virtualization on real short, medium, and long loaded conversations before considering cold-start bootstrap work.
 
 ## Engineering Policy
 

@@ -51,6 +51,18 @@
     "message": "临时整理旧轮次，刷新后恢复。",
     "description": "移除模式说明"
   },
+  "virtualModeTitle": {
+    "message": "性能虚拟化",
+    "description": "性能虚拟化模式标题"
+  },
+  "virtualModeDesc": {
+    "message": "保留消息 DOM，但冻结远离屏幕的消息渲染，以降低长对话页面负担。",
+    "description": "性能虚拟化模式说明"
+  },
+  "virtualModeSettingsHint": {
+    "message": "此模式不使用最近轮数和自动保持设置，而是按消息与视口的距离动态管理。",
+    "description": "说明性能虚拟化不使用轮数与自动保持设置"
+  },
   "safeModeSelected": {
     "message": "已选择视觉控制：旧轮次仍在页面中，仅视觉隐藏。",
     "description": "视觉控制模式选中状态"
@@ -58,6 +70,21 @@
   "removeModeSelected": {
     "message": "已选择刷新恢复：旧轮次会从当前视图丢弃，刷新 ChatGPT 后恢复。",
     "description": "移除模式选中状态"
+  },
+  "virtualModeSelected": {
+    "message": "已选择性能虚拟化：远处的已加载消息保留在 DOM 中，并在接近视口前恢复渲染。",
+    "description": "性能虚拟化模式选中状态"
+  },
+  "virtualModeApplied": {
+    "message": "已对当前加载的消息启用性能虚拟化。",
+    "description": "性能虚拟化启用状态"
+  },
+  "virtualModeUnsupported": {
+    "message": "当前浏览器无法使用性能虚拟化（$REASON$），页面保持原样。",
+    "description": "性能虚拟化能力不受支持时的状态",
+    "placeholders": {
+      "REASON": { "content": "$1", "example": "resize-observer-unsupported" }
+    }
   },
   "keepRoundsLabel": {
     "message": "仅保留最近：",
@@ -102,6 +129,33 @@
   "domReductionLabel": {
     "message": "视图减少",
     "description": "视图减少比例指标标签"
+  },
+  "virtualRenderedTurnsLabel": {
+    "message": "正常渲染",
+    "description": "虚拟化模式中活动与预热消息指标标签"
+  },
+  "virtualRenderedTurnsValue": {
+    "message": "$RENDERED$ / $TOTAL$",
+    "description": "虚拟化模式中正常渲染和注册消息数",
+    "placeholders": {
+      "RENDERED": { "content": "$1", "example": "12" },
+      "TOTAL": { "content": "$2", "example": "80" }
+    }
+  },
+  "virtualFrozenTurnsLabel": {
+    "message": "已冻结",
+    "description": "虚拟化模式中冻结消息指标标签"
+  },
+  "virtualFrozenTurnsValue": {
+    "message": "$ROUNDS$",
+    "description": "虚拟化模式中冻结消息数",
+    "placeholders": {
+      "ROUNDS": { "content": "$1", "example": "68" }
+    }
+  },
+  "virtualFrozenRatioLabel": {
+    "message": "冻结比例",
+    "description": "虚拟化模式中冻结消息比例指标标签"
   },
   "optimizedRoundsValue": {
     "message": "$ROUNDS$ 轮",

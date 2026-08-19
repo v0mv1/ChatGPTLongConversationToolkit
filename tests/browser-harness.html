@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>CHC Virtualizer Browser Harness</title>
+  <style>
+    body { font: 14px/1.5 sans-serif; margin: 0; }
+    #scroll-root { height: 600px; overflow-y: auto; }
+    .turn { border-bottom: 1px solid #ddd; padding: 18px; }
+    #result { background: #111827; color: #e5e7eb; margin: 0; padding: 12px; white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+  <pre id="result">running</pre>
+  <main id="scroll-root"><div id="thread"></div></main>
+  <script src="../virtualizer.js"></script>
+  <script src="browser-harness.js"></script>
+</body>
+</html>

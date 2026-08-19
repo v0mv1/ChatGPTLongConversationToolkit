@@ -25,15 +25,15 @@
       <div id="emptyViewState" class="status-empty" data-i18n="currentViewEmpty">No manageable conversation detected on this page.</div>
       <div class="status-grid">
         <div class="status-metric wide">
-          <span class="metric-label" data-i18n="visibleRoundsLabel">Visible</span>
+          <span id="visibleMetricLabel" class="metric-label" data-i18n="visibleRoundsLabel">Visible</span>
           <strong id="visibleRounds">0 / 0</strong>
         </div>
         <div class="status-metric">
-          <span class="metric-label" data-i18n="optimizedRoundsLabel">Hidden</span>
+          <span id="optimizedMetricLabel" class="metric-label" data-i18n="optimizedRoundsLabel">Hidden</span>
           <strong id="optimizedRounds">0</strong>
         </div>
         <div class="status-metric">
-          <span class="metric-label" data-i18n="domReductionLabel">View reduced</span>
+          <span id="reductionMetricLabel" class="metric-label" data-i18n="domReductionLabel">View reduced</span>
           <strong id="domReduction">0%</strong>
         </div>
       </div>
@@ -58,10 +58,18 @@
             <span class="mode-desc" data-i18n="removeModeDesc">Advanced: discard older exchanges from this view. Refresh ChatGPT to restore.</span>
           </span>
         </label>
+
+        <label class="mode-card">
+          <input type="radio" name="cleanupMode" value="virtual" />
+          <span class="mode-content">
+            <span class="mode-title" data-i18n="virtualModeTitle">Performance Virtualization</span>
+            <span class="mode-desc" data-i18n="virtualModeDesc">Keeps distant messages in the DOM but skips most off-screen rendering work.</span>
+          </span>
+        </label>
       </div>
     </section>
 
-    <section class="settings-section compact">
+    <section id="roundSettings" class="settings-section compact">
       <div class="rounds-row">
         <label for="keepRounds" data-i18n="keepRoundsLabel">Keep recent:</label>
         <input type="number" id="keepRounds" min="1" max="100" value="10" />
@@ -72,6 +80,7 @@
           <span class="checkbox-text" data-i18n="autoMaintainLabel">Auto-maintain while chatting</span>
         </label>
       </div>
+      <p id="virtualModeHint" class="setting-note" data-i18n="virtualModeSettingsHint" hidden>Recent-exchange settings do not apply in this mode; distance from the viewport is used instead.</p>
     </section>
 
     <button id="removeOldRounds" class="btn btn-outline view-control-action">

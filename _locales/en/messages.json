@@ -51,6 +51,18 @@
     "message": "Temporarily trims old exchanges. Refresh to restore.",
     "description": "Remove mode description"
   },
+  "virtualModeTitle": {
+    "message": "Performance Virtualization",
+    "description": "Performance virtualization mode title"
+  },
+  "virtualModeDesc": {
+    "message": "Keeps distant messages in the DOM but skips most off-screen rendering work.",
+    "description": "Performance virtualization mode description"
+  },
+  "virtualModeSettingsHint": {
+    "message": "Recent-exchange settings do not apply in this mode; distance from the viewport is used instead.",
+    "description": "Hint explaining that keep rounds and auto-maintain do not apply to virtualization"
+  },
   "safeModeSelected": {
     "message": "Visual Control selected: older exchanges stay in the page and are hidden visually.",
     "description": "Visual mode selected status"
@@ -58,6 +70,21 @@
   "removeModeSelected": {
     "message": "Refresh Restore selected: older exchanges are discarded from this view and restored by refreshing ChatGPT.",
     "description": "Remove mode selected status"
+  },
+  "virtualModeSelected": {
+    "message": "Performance Virtualization selected: distant loaded messages stay in the DOM and thaw before they approach the viewport.",
+    "description": "Performance virtualization mode selected status"
+  },
+  "virtualModeApplied": {
+    "message": "Performance Virtualization enabled for currently loaded messages.",
+    "description": "Performance virtualization enabled status"
+  },
+  "virtualModeUnsupported": {
+    "message": "Performance Virtualization is unavailable in this browser ($REASON$). The page was left unchanged.",
+    "description": "Performance virtualization unsupported status",
+    "placeholders": {
+      "REASON": { "content": "$1", "example": "resize-observer-unsupported" }
+    }
   },
   "keepRoundsLabel": {
     "message": "Keep recent:",
@@ -102,6 +129,33 @@
   "domReductionLabel": {
     "message": "View reduced",
     "description": "Metric label for view reduction"
+  },
+  "virtualRenderedTurnsLabel": {
+    "message": "Rendered turns",
+    "description": "Metric label for active and warm virtualized turns"
+  },
+  "virtualRenderedTurnsValue": {
+    "message": "$RENDERED$ / $TOTAL$",
+    "description": "Metric value for rendered and registered virtualized turns",
+    "placeholders": {
+      "RENDERED": { "content": "$1", "example": "12" },
+      "TOTAL": { "content": "$2", "example": "80" }
+    }
+  },
+  "virtualFrozenTurnsLabel": {
+    "message": "Frozen turns",
+    "description": "Metric label for frozen virtualized turns"
+  },
+  "virtualFrozenTurnsValue": {
+    "message": "$ROUNDS$",
+    "description": "Metric value for frozen virtualized turns",
+    "placeholders": {
+      "ROUNDS": { "content": "$1", "example": "68" }
+    }
+  },
+  "virtualFrozenRatioLabel": {
+    "message": "Frozen ratio",
+    "description": "Metric label for frozen virtualized turn ratio"
   },
   "optimizedRoundsValue": {
     "message": "$ROUNDS$",

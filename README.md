@@ -2,7 +2,7 @@
 
 A lightweight, local-first Chrome and Edge extension for searching, navigating, organizing, and revisiting long ChatGPT conversations.
 
-Version 1.4.1 restores a cleaner core popup and ChatGPT reading experience. The popup focuses on Visual Hide and Temporary Trim, while advanced tools such as Conversation Navigator, search, and bookmarks stay behind a compact optional Navigator link. The extension also keeps the latest N conversation exchanges visible and can hide older messages behind a small expandable placeholder.
+Version 1.4.1 restores a cleaner core popup and ChatGPT reading experience. The popup offers Visual Hide, Temporary Trim, and an experimental Performance Virtualization mode, while advanced tools such as Conversation Navigator, search, and bookmarks stay behind a compact optional Navigator link.
 
 It only works with conversation content currently available on the page. It does not delete ChatGPT account data or upload conversation content.
 
@@ -17,6 +17,7 @@ Long Conversation Experience:
 - Keep recent conversation exchanges visible
 - Hide older exchanges visually when a conversation becomes hard to scan
 - Optionally discard older page nodes until refresh
+- Optionally keep loaded turn DOM in place while freezing rendering work far from the viewport
 - Stay local, lightweight, and privacy-first
 
 The extension no longer treats performance cleanup as the core product promise. ChatGPT may lazy-load or virtualize conversation content, so Navigator and future Outline features are scoped to currently loaded content unless explicitly stated otherwise.
@@ -26,6 +27,7 @@ The extension no longer treats performance cleanup as the core product promise. 
 - Configurable recent-exchange limit, defaulting to 10 exchanges
 - Visual Hide: lowest risk, expandable in place
 - Temporary Trim: strongest page reduction, restored by refreshing ChatGPT
+- Performance Virtualization: keeps loaded turn DOM, freezes distant rendering, and thaws before turns approach the viewport
 - Optional Conversation Navigator with message-level search and local bookmarks
 - Optional auto-maintain mode for long sessions
 - Conversation exchange count badge
@@ -83,9 +85,49 @@ To manage the visible conversation:
 2. Choose a mode:
    - Visual Hide: lowest risk, expandable in place
    - Temporary Trim: strongest page reduction, restored by refreshing ChatGPT
+   - Performance Virtualization: preserves continuous scrolling and loaded turn DOM while skipping most distant rendering work
 3. Click **Organize conversation now**
 
 Visual Hide shows an expandable placeholder for older messages. Temporary Trim leaves a non-expandable placeholder.
+
+Performance Virtualization is distance-based, so the recent-exchange and auto-maintain settings do not apply to it. It operates only on turns ChatGPT currently mounts in the page. It never fetches or exposes server-side history that ChatGPT has not loaded, and it automatically fails open when required browser capabilities are unavailable.
+
+## View Control Modes
+
+### Visual Hide
+
+- Hides older messages with a reversible visual state.
+- Keeps hidden turn DOM available to the extension.
+- Changes the visible document length.
+
+### Temporary Trim
+
+- Removes currently loaded old turn DOM until ChatGPT is refreshed.
+- Provides the strongest immediate DOM reduction.
+- Has the highest compatibility risk and cannot search removed turns before refresh.
+
+### Performance Virtualization
+
+- Keeps currently loaded ChatGPT turn DOM and React ownership intact.
+- Freezes rendering work only for turns beyond a viewport warm margin.
+- Preserves approximate block height for continuous scrolling.
+- Thaws nearby turns and Navigator/Bookmark targets before they become visible.
+- Keeps the latest turns rendered and never intentionally freezes the active streaming response.
+- Does not access conversation history that ChatGPT has not mounted.
+
+## Performance Diagnostics
+
+Diagnostics are disabled by default. For development, set `debugMode: true` in `chrome.storage.local`, reload ChatGPT, then run `__CHC_DEBUG__.diagnose()` from the extension content-script console context. The report includes loaded turn counts and roles, thread and detected scroll root, DOM node counts, viewport and scroll dimensions, per-turn geometry and cached height, virtualization states, and Long Task totals when the browser supports that entry type.
+
+The repository includes two no-dependency checks:
+
+```text
+node tests/virtualizer.test.js
+python -m http.server 8765
+# Open http://127.0.0.1:8765/tests/browser-harness.html in Chromium
+```
+
+The browser harness validates freeze/thaw ownership, intrinsic-size scroll stability, navigation pre-thaw, latest-turn pinning, and complete disable cleanup. It is not a substitute for benchmarking a real loaded ChatGPT conversation.
 
 Search terms are not stored. Bookmark identifiers, short previews, roles, and timestamps are stored locally and are never uploaded.
 

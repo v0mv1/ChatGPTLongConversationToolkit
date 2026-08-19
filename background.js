@@ -9,11 +9,11 @@ function isChatGPTUrl(url) {
 
 function normalizeRoundStats(input) {
   if (typeof input === 'number') {
-    return { visibleRounds: input, totalRounds: input };
+    return { visibleRounds: input, totalRounds: input, virtualization: null };
   }
   const visibleRounds = input?.visibleRounds ?? input?.rounds ?? 0;
   const totalRounds = input?.totalRounds ?? visibleRounds;
-  return { visibleRounds, totalRounds };
+  return { visibleRounds, totalRounds, virtualization: input?.virtualization || null };
 }
 
 function setBadge(tabId, statsInput) {

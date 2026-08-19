@@ -232,6 +232,17 @@ h1 {
   white-space: nowrap;
 }
 
+.setting-note {
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 1.35;
+  margin-top: 6px;
+}
+
+.settings-section[data-mode-disabled="true"] .rounds-row {
+  opacity: 0.52;
+}
+
 .checkbox-label {
   align-items: center;
   color: #374151;
