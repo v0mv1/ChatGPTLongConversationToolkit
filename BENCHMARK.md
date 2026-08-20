@@ -1,5 +1,7 @@
 # Performance Virtualization Benchmark
 
+Status: benchmark protocol and synthetic harness are complete; authenticated real ChatGPT runtime and cold-open benchmark runs have not yet been completed.
+
 Performance Virtualization must be measured on the same loaded ChatGPT conversation, Chrome/Edge build, extension build, viewport, zoom, and machine. ChatGPT may mount only part of a conversation, so loaded DOM counts must not be reported as the server-side conversation size.
 
 ## Required groups

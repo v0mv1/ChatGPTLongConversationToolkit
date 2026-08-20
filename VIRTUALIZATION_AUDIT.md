@@ -2,6 +2,20 @@
 
 This document records synthetic Chromium evidence and lifecycle invariants before real ChatGPT benchmarking. It is not a claim that Performance Virtualization outperforms the other modes.
 
+## Validation status
+
+| Area | Status |
+| --- | --- |
+| Implementation | DONE |
+| Synthetic Chromium validation | DONE |
+| Lifecycle and race-condition hardening | DONE |
+| Benchmark protocol | DONE |
+| Real ChatGPT correctness | PARTIAL / IN PROGRESS |
+| Real runtime benchmark | NOT TESTED |
+| Real cold-open benchmark | NOT TESTED |
+| Native accessibility audit | NOT TESTED |
+| Production freeze strategy | NOT FINAL |
+
 ## Hidden versus auto
 
 The [CSS Containment Level 2 specification](https://drafts.csswg.org/css-contain-2/) gives the two strategies materially different user-agent semantics. `hidden` always skips descendant contents and excludes them from find-in-page, tab order, selection/focus, and the accessibility tree. `auto` may skip offscreen rendering while keeping descendants available to those browser features and must unskip relevant content when needed. Chrome's [`hidden=until-found` explanation](https://developer.chrome.com/docs/css-ui/hidden-until-found) independently shows that ordinary hidden content needs special browser behavior to become findable; V1 does not use that HTML feature.

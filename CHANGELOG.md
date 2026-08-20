@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## Version 1.5.0-beta.1 - Experimental Performance Virtualization
+
+- Added experimental Performance Virtualization as a third long-conversation management mode
+- Kept currently mounted ChatGPT turn DOM under ChatGPT/React ownership
+- Added ACTIVE, WARM, and FROZEN rendering states with measured intrinsic-height preservation
+- Added Navigator and Bookmark target pre-thaw behavior
+- Protected recent turns and the active streaming response from intentional freezing
+- Added hidden/auto freeze-strategy support for controlled testing
+- Added mutation feedback filtering, width-change invalidation, and lifecycle generation guards
+- Added synthetic Chromium, observer lifecycle, route/destroy, and stale-callback regression coverage
+- Added a five-group real ChatGPT benchmark protocol
+
+This is an experimental beta pre-release. Broad real-world performance, cold-open, and native accessibility validation are still in progress, and no guaranteed performance improvement is claimed.
+
 ## Version 1.4.1 - Cleaner Core Popup
 
 - Restored the popup to a simple core-control layout focused on Visual Hide and Temporary Trim

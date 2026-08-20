@@ -1,6 +1,6 @@
 {
   "extensionName": {
-    "message": "ChatGPT Long Conversation Toolkit",
+    "message": "ChatGPT Long Conversation Toolkit - Beta",
     "description": "Extension name"
   },
   "extensionDescription": {
@@ -8,7 +8,7 @@
     "description": "Extension description"
   },
   "title": {
-    "message": "ChatGPT Long Conversation Toolkit",
+    "message": "ChatGPT Long Conversation Toolkit - Beta",
     "description": "Popup title"
   },
   "advancedToolsDisabled": {

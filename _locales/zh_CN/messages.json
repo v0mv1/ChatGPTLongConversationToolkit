@@ -1,6 +1,6 @@
 {
   "extensionName": {
-    "message": "ChatGPT 长对话工具箱",
+    "message": "ChatGPT 长对话工具箱 - Beta",
     "description": "扩展名称"
   },
   "extensionDescription": {
@@ -8,7 +8,7 @@
     "description": "扩展描述"
   },
   "title": {
-    "message": "ChatGPT 长对话工具箱",
+    "message": "ChatGPT 长对话工具箱 - Beta",
     "description": "弹窗标题"
   },
   "advancedToolsDisabled": {

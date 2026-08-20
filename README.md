@@ -2,7 +2,7 @@
 
 A lightweight, local-first Chrome and Edge extension for searching, navigating, organizing, and revisiting long ChatGPT conversations.
 
-Version 1.4.1 restores a cleaner core popup and ChatGPT reading experience. The popup offers Visual Hide, Temporary Trim, and an experimental Performance Virtualization mode, while advanced tools such as Conversation Navigator, search, and bookmarks stay behind a compact optional Navigator link.
+Version 1.5.0-beta.1 is a beta pre-release that adds experimental Performance Virtualization as a third long-conversation management mode. The popup continues to offer Visual Hide and Temporary Trim, while advanced tools such as Conversation Navigator, search, and bookmarks stay behind a compact optional Navigator link.
 
 It only works with conversation content currently available on the page. It does not delete ChatGPT account data or upload conversation content.
 
@@ -27,7 +27,7 @@ The extension no longer treats performance cleanup as the core product promise. 
 - Configurable recent-exchange limit, defaulting to 10 exchanges
 - Visual Hide: lowest risk, expandable in place
 - Temporary Trim: strongest page reduction, restored by refreshing ChatGPT
-- Performance Virtualization: keeps loaded turn DOM, freezes distant rendering, and thaws before turns approach the viewport
+- Performance Virtualization (experimental): keeps loaded turn DOM, freezes distant rendering, and thaws before turns approach the viewport
 - Optional Conversation Navigator with message-level search and local bookmarks
 - Optional auto-maintain mode for long sessions
 - Conversation exchange count badge
@@ -96,24 +96,51 @@ Performance Virtualization is distance-based, so the recent-exchange and auto-ma
 
 ### Visual Hide
 
-- Hides older messages with a reversible visual state.
+- Uses reversible visual hiding for older loaded turns.
 - Keeps hidden turn DOM available to the extension.
-- Changes the visible document length.
+- Is simple and compatible, but changes the visible document length.
 
 ### Temporary Trim
 
-- Removes currently loaded old turn DOM until ChatGPT is refreshed.
-- Provides the strongest immediate DOM reduction.
-- Has the highest compatibility risk and cannot search removed turns before refresh.
+- Removes selected loaded DOM until ChatGPT is refreshed.
+- Can reduce DOM volume more aggressively.
+- Has higher compatibility risk and cannot search removed turns before refresh.
 
 ### Performance Virtualization
 
-- Keeps currently loaded ChatGPT turn DOM and React ownership intact.
-- Freezes rendering work only for turns beyond a viewport warm margin.
-- Preserves approximate block height for continuous scrolling.
-- Thaws nearby turns and Navigator/Bookmark targets before they become visible.
-- Keeps the latest turns rendered and never intentionally freezes the active streaming response.
-- Does not access conversation history that ChatGPT has not mounted.
+- Keeps loaded ChatGPT conversation turn DOM and React ownership intact.
+- Does not detach, replace, clone, or remove ChatGPT-managed turns.
+- Dynamically classifies loaded turns as ACTIVE, WARM, or FROZEN.
+- Freezes distant rendering with browser containment capabilities.
+- Preserves approximate layout height through measured intrinsic size.
+- Automatically thaws turns before they approach the viewport.
+- Integrates with Navigator and Bookmark jumps by thawing their targets first.
+- Protects recent turns and the active streaming response from intentional freezing.
+- Isolates SPA conversation lifecycles and stale asynchronous callbacks.
+
+Performance Virtualization manages only turns currently mounted by ChatGPT. Users can continue scrolling through loaded history, with nearby frozen turns restored before they enter the viewport. This is rendering containment, not server-side lazy loading, React virtualization, or DOM-removal virtualization.
+
+It does not:
+
+- Prevent ChatGPT from downloading conversation data.
+- Prevent initial React or component creation.
+- Detach or remove turn DOM as a performance strategy.
+- Intercept ChatGPT backend APIs.
+- Access server-side history that ChatGPT has not mounted.
+- Guarantee faster cold-open or runtime performance.
+
+The internal `content-visibility: hidden` and `auto` freeze strategies remain available for controlled testing. The production freeze strategy is still being evaluated and may change before stable v1.5.0.
+
+## Beta Known Limitations
+
+- Real-world performance improvement has not yet been established across a large set of authenticated ChatGPT long conversations.
+- Cold-open performance is not yet optimized separately.
+- `content-visibility: hidden` versus `auto` is still under real-world evaluation.
+- Native Ctrl+F, keyboard accessibility, and accessibility-tree behavior require broader validation.
+- ChatGPT DOM or layout changes may require selector updates.
+- Only currently mounted ChatGPT turns can be virtualized.
+
+This mode is experimental and requires broader validation. No guaranteed performance improvement is claimed yet.
 
 ## Performance Diagnostics
 
@@ -137,6 +164,10 @@ Search terms are not stored. Bookmark identifiers, short previews, roles, and ti
 
 - [Open Source](https://github.com/manxisuo/ChatGPTLongConversationToolkit)
 - Feedback: [English](https://tally.so/r/2EDLp9) · [简体中文](https://tally.so/r/ZjZYAv)
+
+## Upstream and Fork
+
+This fork builds on the original [ChatGPT Long Conversation Toolkit](https://github.com/manxisuo/ChatGPTLongConversationToolkit) and preserves the original project attribution. This fork adds the experimental Performance Virtualization implementation and its synthetic validation, lifecycle hardening, benchmark protocol, and beta release documentation.
 
 ## Roadmap Principle
 
