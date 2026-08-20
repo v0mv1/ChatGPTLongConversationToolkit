@@ -1,56 +1,107 @@
 # Performance Virtualization Benchmark
 
-Performance Virtualization must be measured on the same loaded ChatGPT conversation and browser viewport in each mode. Do not infer complete server-side conversation size from the loaded DOM.
+Performance Virtualization must be measured on the same loaded ChatGPT conversation, Chrome/Edge build, extension build, viewport, zoom, and machine. ChatGPT may mount only part of a conversation, so loaded DOM counts must not be reported as the server-side conversation size.
 
-## Required comparison
+## Required groups
 
-Run each case after a fresh page load:
+Run every scenario in this order after a fresh page load:
 
-1. Extension disabled
-2. Visual Hide
-3. Temporary Trim
-4. Performance Virtualization
+| Group | Configuration |
+| --- | --- |
+| A | Extension disabled |
+| B | Visual Hide |
+| C | Temporary Trim |
+| D | Performance Virtualization with `content-visibility: auto` |
+| E | Performance Virtualization with `content-visibility: hidden` |
 
-Record:
+Do not assume D or E wins. B and C are separate behavioral baselines, not equivalent rendering implementations.
 
-- Conversation ID and viewport size
-- Loaded, User, and Assistant turn counts
-- Total and conversation DOM node counts
-- Detected thread element and scroll root
-- Viewport and scroll height
-- Long Task count, total duration, and maximum duration during the same scroll sequence
-- ACTIVE, WARM, and FROZEN turn counts
-- Cold-open time until the page is interactable
-- Any blank region, flicker, scroll jump, missing/duplicate message, React error, or console exception
-
-## Debug collection
-
-Diagnostics are off by default. Set `debugMode: true` in `chrome.storage.local`, reload the ChatGPT conversation, and run:
+The virtualization strategy is an internal benchmark switch, not a popup setting. In the extension content-script console context:
 
 ```js
-__CHC_DEBUG__.diagnose()
+chrome.storage.local.set({
+  debugMode: true,
+  virtualizationFreezeStrategy: 'auto' // or 'hidden'
+})
 ```
 
-Use the extension content-script console context. `PerformanceObserver` and the `longtask` entry type are feature-detected; unsupported metrics are reported as unavailable.
+Reload the ChatGPT tab after changing the strategy. The current runtime strategy is available in `__CHC_DEBUG__.diagnose().virtualization.freezeStrategy`.
 
-## Standard interaction sequence
+## Required scenarios
 
-1. Open the conversation and wait for currently mounted content to settle.
-2. Capture the initial diagnostic.
-3. Scroll to the bottom.
-4. Scroll rapidly upward and then rapidly downward over the same distance.
-5. Jump to a distant Search result.
-6. Jump to a distant Bookmark.
-7. Send a message and wait for streaming to finish.
-8. Resize the window.
-9. Switch tabs and return.
-10. Navigate to another conversation through the ChatGPT SPA and return.
-11. Capture the final diagnostic and console errors.
+Run and mark pass/fail for each group:
 
-Do not claim a performance improvement unless at least one relevant Layout, Paint, or Long Task measure improves without correctness or scroll-stability regressions.
+1. Cold open from a fresh tab.
+2. Idle after currently mounted content settles.
+3. Slow scroll from bottom to top and back down.
+4. Fast scroll from bottom to top and back down.
+5. Navigator jump to a distant Search result and Bookmark.
+6. Native Chrome/Edge Ctrl+F for text in a distant turn.
+7. Send a message and wait for the streaming response to finish.
+8. Resize through 1600 -> 1200 -> 900 -> 1600 CSS pixels.
+9. Switch to another conversation through ChatGPT SPA navigation and return.
 
-## Current evidence
+For Ctrl+F, also record whether the match can be reached by Tab navigation, selected with the mouse/keyboard, and exposed by the browser accessibility tree. These are correctness checks, not performance metrics.
 
-The synthetic Chromium harness in `tests/browser-harness.html` verifies the rendering mechanism, not ChatGPT performance. With 40 synthetic turns it registered and measured all turns, froze 31 distant turns, preserved all conversation DOM nodes, kept the latest turn rendered, pre-thawed a navigation target, and fully cleared extension state on disable. Scroll height changed from 13926 px to 13946 px (20 px, approximately 0.14%).
+## Required evaluation dimensions
 
-Real ChatGPT before/after results remain pending because no authenticated long-conversation browser session was available during implementation.
+Record these separately for every group and scenario:
+
+| Dimension | Evidence |
+| --- | --- |
+| Correctness | Missing/duplicate turns, stale streamed output, resource updates, console/React errors |
+| UX | Ctrl+F, Tab order, selection, accessibility, Navigator and Bookmark behavior |
+| Layout | DevTools trace Layout duration/count and unexpected reflows |
+| Paint | DevTools trace Paint/Composite duration/count and blank/flickering regions |
+| Long Tasks | Count, total duration, maximum duration for the same timed interaction |
+| Memory | Browser task-manager/DevTools memory under the same settled conditions |
+| DOM node count | Total nodes and conversation-subtree nodes |
+| Scroll stability | Scroll height, anchor displacement, unexpected scroll jumps |
+
+Also capture conversation ID, viewport and scroll-root geometry, loaded/user/assistant turn counts, ACTIVE/WARM/FROZEN/measured counts, and `maxTurnsProcessedPerReconcile`.
+
+## Trace protocol
+
+1. Close unrelated tabs and keep device power/thermal conditions stable.
+2. Use the same long conversation and wait condition for all five groups.
+3. Record a Chromium DevTools Performance trace for cold open and each timed interaction sequence.
+4. Add markers or timestamps for the start/end of each scenario.
+5. Repeat each group at least three times; report individual runs plus median, not only the best run.
+6. Capture `__CHC_DEBUG__.diagnose()` before and after the interaction sequence.
+7. Record visual defects and console errors even if trace numbers improve.
+
+The Long Task API measures long main-thread JavaScript tasks only. It is useful debug evidence, but it is not a complete Layout/Paint benchmark. Rendering conclusions must come from Chromium DevTools Performance traces.
+
+## Debug counters
+
+Diagnostics are off by default. With `debugMode: true`, capture:
+
+```text
+registeredTurns
+activeTurns
+warmTurns
+frozenTurns
+measuredTurns
+freezeCount
+thawCount
+mutationTriggeredThawCount
+resourceTriggeredThawCount
+observerTriggeredRefreshCount
+extensionMutationIgnoredCount
+reconcileCount
+maxTurnsProcessedPerReconcile
+```
+
+For an idle settled page, deltas for mutation/resource thaw, observer-triggered refresh, thaw, and reconcile should be zero or explainable. If they are not, preserve the mutation samples and classify their origin before changing debounce values.
+
+## Acceptance rules
+
+- No group wins on a single metric.
+- A rendering reduction is invalid if correctness, browser navigation, accessibility, or scroll stability regresses.
+- Compare D and E directly; do not infer `hidden` is superior from stronger skipping semantics alone.
+- Record natural text-reflow displacement separately from virtualization-added displacement during resize.
+- Any repeated background thaw activity is a blocker until its mutation/resource cause is identified.
+
+## Synthetic harness scope
+
+`tests/browser-harness.html` is a deterministic Chromium mechanism test. It covers both freeze strategies, find/focus/selection probes, Navigator/Bookmark pre-thaw, extension/content/resource mutations, idle counters, and responsive width changes. It does not replace authenticated ChatGPT traces or browser accessibility inspection.

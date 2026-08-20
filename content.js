@@ -12,6 +12,7 @@ let cleanupModeEnabled = CLEANUP_MODES.SAFE;
 let modeTransitionVersion = 0;
 let advancedToolsEnabled = false;
 let debugModeEnabled = false;
+let virtualizationFreezeStrategy = 'hidden';
 let performanceVirtualizer = null;
 let cleanupTimer = null;
 let badgeTimer = null;
@@ -674,6 +675,8 @@ function ensurePerformanceVirtualizer() {
     isStreamingTurn,
     onRenderStateChange: scheduleAdvancedEnhancementRefresh,
     onStatsChange: scheduleBadgeUpdate
+  }, {
+    freezeStrategy: virtualizationFreezeStrategy
   });
   performanceVirtualizer.init({ debug: debugModeEnabled });
   return performanceVirtualizer;
@@ -741,7 +744,8 @@ function updateDebugApi() {
   }
   globalThis.__CHC_DEBUG__ = Object.freeze({
     diagnose: runPerformanceDiagnostic,
-    getVirtualizationStats: () => ensurePerformanceVirtualizer()?.getStats() || null
+    getVirtualizationStats: () => ensurePerformanceVirtualizer()?.getStats() || null,
+    freezeStrategy: virtualizationFreezeStrategy
   });
 }
 
@@ -2487,10 +2491,12 @@ async function initAutoMaintain() {
       collapseOldMessages: true,
       advancedToolsEnabled: false,
       conversationToolsEnabled: false,
-      debugMode: false
+      debugMode: false,
+      virtualizationFreezeStrategy: 'hidden'
     });
     advancedToolsEnabled = resolveAdvancedToolsEnabled(result);
     debugModeEnabled = Boolean(result.debugMode);
+    virtualizationFreezeStrategy = result.virtualizationFreezeStrategy === 'auto' ? 'auto' : 'hidden';
     updateDebugApi();
     await updateAutoMaintain(result.autoMaintain, result.keepRounds, resolveCleanupMode(result));
     await loadConversationBookmarks();
@@ -2534,6 +2540,14 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.debugMode) {
     debugModeEnabled = Boolean(changes.debugMode.newValue);
     ensurePerformanceVirtualizer()?.setDebugEnabled(debugModeEnabled);
+    updateDebugApi();
+  }
+
+  if (changes.virtualizationFreezeStrategy) {
+    virtualizationFreezeStrategy = changes.virtualizationFreezeStrategy.newValue === 'auto'
+      ? 'auto'
+      : 'hidden';
+    // Strategy changes are debug-only and take effect after the content script reloads.
     updateDebugApi();
   }
 

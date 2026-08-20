@@ -117,17 +117,19 @@ Performance Virtualization is distance-based, so the recent-exchange and auto-ma
 
 ## Performance Diagnostics
 
-Diagnostics are disabled by default. For development, set `debugMode: true` in `chrome.storage.local`, reload ChatGPT, then run `__CHC_DEBUG__.diagnose()` from the extension content-script console context. The report includes loaded turn counts and roles, thread and detected scroll root, DOM node counts, viewport and scroll dimensions, per-turn geometry and cached height, virtualization states, and Long Task totals when the browser supports that entry type.
+Diagnostics are disabled by default. For development, set `debugMode: true` in `chrome.storage.local`, reload ChatGPT, then run `__CHC_DEBUG__.diagnose()` from the extension content-script console context. The report includes loaded turn counts and roles, thread and detected scroll root, DOM node counts, viewport and scroll dimensions, per-turn geometry and cached height, virtualization lifecycle counters, and Long Task totals when the browser supports that entry type. The internal `virtualizationFreezeStrategy` storage key accepts `hidden` or `auto` for benchmark A/B runs; it is intentionally not exposed in the popup and takes effect after a page reload.
 
 The repository includes two no-dependency checks:
 
 ```text
 node tests/virtualizer.test.js
 python -m http.server 8765
-# Open http://127.0.0.1:8765/tests/browser-harness.html in Chromium
+# Open both strategy variants in Chromium:
+# http://127.0.0.1:8765/tests/browser-harness.html?strategy=hidden&nativeFind=1
+# http://127.0.0.1:8765/tests/browser-harness.html?strategy=auto&nativeFind=1
 ```
 
-The browser harness validates freeze/thaw ownership, intrinsic-size scroll stability, navigation pre-thaw, latest-turn pinning, and complete disable cleanup. It is not a substitute for benchmarking a real loaded ChatGPT conversation.
+The browser harness validates freeze/thaw ownership, find/focus/selection proxies, mutation and resource-triggered thaw classification, responsive height invalidation, navigation pre-thaw, latest-turn pinning, and complete disable cleanup. It is not a substitute for benchmarking a real loaded ChatGPT conversation.
 
 Search terms are not stored. Bookmark identifiers, short previews, roles, and timestamps are stored locally and are never uploaded.
 

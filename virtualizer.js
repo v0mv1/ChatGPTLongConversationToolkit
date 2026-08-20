@@ -9,6 +9,7 @@
   });
 
   const VIRTUALIZATION_DEFAULTS = Object.freeze({
+    freezeStrategy: 'hidden',
     warmMarginPx: 3000,
     pinnedRecentTurns: 4,
     minTurnHeight: 8,
@@ -20,6 +21,18 @@
 
   const VIRTUAL_STYLE_ID = 'chc-virtualizer-styles';
   const TURN_SELECTOR = 'section[data-testid^="conversation-turn-"][data-turn-id], article';
+  const EXTENSION_OWNED_SELECTOR = [
+    '[data-chc-placeholder="true"]',
+    '.chc-bookmark-slot',
+    '.chc-bookmark-button',
+    '.chc-panel',
+    '.chc-panel-toggle',
+    `#${VIRTUAL_STYLE_ID}`
+  ].join(', ');
+
+  function normalizeFreezeStrategy(strategy) {
+    return strategy === 'auto' ? 'auto' : 'hidden';
+  }
 
   class HeightCache {
     constructor(widthTolerancePx) {
@@ -135,13 +148,13 @@
     return document.scrollingElement || document.documentElement;
   }
 
-  function getCapabilityFailure() {
+  function getCapabilityFailure(freezeStrategy = VIRTUALIZATION_DEFAULTS.freezeStrategy) {
     if (typeof IntersectionObserver !== 'function') return 'intersection-observer-unsupported';
     if (typeof ResizeObserver !== 'function') return 'resize-observer-unsupported';
     if (typeof CSS === 'undefined' || typeof CSS.supports !== 'function') {
       return 'css-supports-unsupported';
     }
-    if (!CSS.supports('content-visibility', 'hidden')) {
+    if (!CSS.supports('content-visibility', normalizeFreezeStrategy(freezeStrategy))) {
       return 'content-visibility-unsupported';
     }
     if (!CSS.supports('contain-intrinsic-block-size', '1px')) {
@@ -155,8 +168,12 @@
     const style = document.createElement('style');
     style.id = VIRTUAL_STYLE_ID;
     style.textContent = `
-      [data-chc-virtual-state="frozen"] {
+      [data-chc-virtual-state="frozen"][data-chc-freeze-strategy="hidden"] {
         content-visibility: hidden !important;
+        contain-intrinsic-block-size: var(--chc-intrinsic-height) !important;
+      }
+      [data-chc-virtual-state="frozen"][data-chc-freeze-strategy="auto"] {
+        content-visibility: auto !important;
         contain-intrinsic-block-size: var(--chc-intrinsic-height) !important;
       }
     `;
@@ -171,12 +188,13 @@
     constructor(adapter, options = {}) {
       this.adapter = adapter;
       this.options = { ...VIRTUALIZATION_DEFAULTS, ...options };
+      this.options.freezeStrategy = normalizeFreezeStrategy(this.options.freezeStrategy);
       this.registry = new TurnRegistry();
       this.heightCache = new HeightCache(this.options.resizeWidthTolerancePx);
       this.enabled = false;
       this.destroyed = false;
       this.debugEnabled = false;
-      this.unsupportedReason = getCapabilityFailure();
+      this.unsupportedReason = getCapabilityFailure(this.options.freezeStrategy);
       this.conversationId = '';
       this.thread = null;
       this.scrollRoot = null;
@@ -185,10 +203,19 @@
       this.resizeObserver = null;
       this.refreshFrame = null;
       this.resizeTimer = null;
+      this.pendingResizeAnchor = null;
+      this.lifecycleGeneration = 0;
+      this.pinTimers = new Map();
       this.freezeCount = 0;
       this.thawCount = 0;
       this.resizeCount = 0;
       this.reconcileCount = 0;
+      this.mutationTriggeredThawCount = 0;
+      this.resourceTriggeredThawCount = 0;
+      this.observerTriggeredRefreshCount = 0;
+      this.extensionMutationIgnoredCount = 0;
+      this.maxTurnsProcessedPerReconcile = 0;
+      this.extensionWriteTargets = new WeakSet();
       this.longTaskObserver = null;
       this.longTaskStats = { count: 0, totalDuration: 0, maxDuration: 0 };
       this.onWindowResize = this.onWindowResize.bind(this);
@@ -198,7 +225,7 @@
     init({ debug = false } = {}) {
       if (this.destroyed) return false;
       this.setDebugEnabled(debug);
-      this.unsupportedReason = getCapabilityFailure();
+      this.unsupportedReason = getCapabilityFailure(this.options.freezeStrategy);
       if (this.unsupportedReason) return false;
       ensureVirtualizerStyles();
       return true;
@@ -217,6 +244,7 @@
       }
 
       if (this.unsupportedReason === 'thread-not-found') this.unsupportedReason = '';
+      this.advanceLifecycleGeneration();
       this.enabled = true;
       this.thread = thread;
       this.scrollRoot = getConversationScrollRoot(thread);
@@ -230,14 +258,7 @@
 
     disable() {
       this.enabled = false;
-      if (this.refreshFrame !== null) {
-        cancelAnimationFrame(this.refreshFrame);
-        this.refreshFrame = null;
-      }
-      if (this.resizeTimer !== null) {
-        clearTimeout(this.resizeTimer);
-        this.resizeTimer = null;
-      }
+      this.advanceLifecycleGeneration();
       window.removeEventListener('resize', this.onWindowResize);
       document.removeEventListener?.('load', this.onResourceLoad, true);
       this.disconnectObservers();
@@ -256,18 +277,62 @@
       this.destroyed = true;
     }
 
+    advanceLifecycleGeneration() {
+      this.lifecycleGeneration += 1;
+      if (this.refreshFrame !== null) {
+        cancelAnimationFrame(this.refreshFrame);
+        this.refreshFrame = null;
+      }
+      if (this.resizeTimer !== null) {
+        clearTimeout(this.resizeTimer);
+        this.resizeTimer = null;
+      }
+      this.pinTimers.forEach((timer, state) => {
+        clearTimeout(timer);
+        state.manualPinnedUntil = 0;
+      });
+      this.pinTimers.clear();
+      this.pendingResizeAnchor = null;
+      return this.lifecycleGeneration;
+    }
+
+    isGenerationCurrent(generation) {
+      return this.enabled && !this.destroyed && generation === this.lifecycleGeneration;
+    }
+
+    isStateCurrent(state) {
+      return Boolean(
+        state &&
+        state.element?.isConnected &&
+        state.layoutElement?.isConnected &&
+        this.registry.getByKey(state.key) === state &&
+        this.registry.getByElement(state.element) === state
+      );
+    }
+
+    recordCounter(name, amount = 1) {
+      if (this.debugEnabled) this[name] += amount;
+    }
+
     createObservers() {
       this.disconnectObservers();
       const root = isDocumentScrollRoot(this.scrollRoot) ? null : this.scrollRoot;
+      const generation = this.lifecycleGeneration;
       this.warmObserver = new IntersectionObserver(
-        (entries) => this.handleWarmEntries(entries),
+        (entries) => {
+          if (this.isGenerationCurrent(generation)) this.handleWarmEntries(entries);
+        },
         { root, rootMargin: `${this.options.warmMarginPx}px 0px`, threshold: 0 }
       );
       this.activeObserver = new IntersectionObserver(
-        (entries) => this.handleActiveEntries(entries),
+        (entries) => {
+          if (this.isGenerationCurrent(generation)) this.handleActiveEntries(entries);
+        },
         { root, rootMargin: '0px', threshold: 0 }
       );
-      this.resizeObserver = new ResizeObserver((entries) => this.handleResizeEntries(entries));
+      this.resizeObserver = new ResizeObserver((entries) => {
+        if (this.isGenerationCurrent(generation)) this.handleResizeEntries(entries);
+      });
     }
 
     disconnectObservers() {
@@ -279,37 +344,59 @@
       this.resizeObserver = null;
     }
 
-    scheduleRefresh() {
+    scheduleRefresh(reason = 'manual') {
       if (!this.enabled || this.refreshFrame !== null) return;
-      this.refreshFrame = requestAnimationFrame(() => {
-        this.refreshFrame = null;
+      if (reason === 'observer') this.recordCounter('observerTriggeredRefreshCount');
+      const generation = this.lifecycleGeneration;
+      const frame = requestAnimationFrame(() => {
+        if (this.refreshFrame === frame) this.refreshFrame = null;
+        if (!this.isGenerationCurrent(generation)) return;
         this.refresh();
       });
+      this.refreshFrame = frame;
     }
 
     refresh() {
       if (!this.enabled) return this.getStats();
       const thread = this.adapter.findThread();
       if (!thread) {
+        if (this.thread || this.registry.values().length > 0) {
+          this.advanceLifecycleGeneration();
+          this.disconnectObservers();
+        }
         this.registry.values().forEach((state) => this.unregisterTurn(state));
         this.thread = null;
+        this.scrollRoot = null;
+        this.conversationId = '';
         return this.getStats();
       }
 
       const nextScrollRoot = getConversationScrollRoot(thread);
       const rootChanged = thread !== this.thread || nextScrollRoot !== this.scrollRoot;
-      this.thread = thread;
-      this.scrollRoot = nextScrollRoot;
-      if (rootChanged) this.createObservers();
-
       const conversationId = this.adapter.getConversationId();
-      if (this.conversationId && conversationId !== this.conversationId) {
+      const conversationChanged = Boolean(
+        this.conversationId && conversationId !== this.conversationId
+      );
+      if (rootChanged || conversationChanged) {
+        this.advanceLifecycleGeneration();
+        this.disconnectObservers();
+      }
+      if (conversationChanged) {
         this.registry.values().forEach((state) => this.unregisterTurn(state));
         this.heightCache.clear();
       }
+      this.thread = thread;
+      this.scrollRoot = nextScrollRoot;
       this.conversationId = conversationId;
+      if (rootChanged || conversationChanged) this.createObservers();
 
       const turns = this.adapter.findTurnElements();
+      if (this.debugEnabled) {
+        this.maxTurnsProcessedPerReconcile = Math.max(
+          this.maxTurnsProcessedPerReconcile,
+          turns.length
+        );
+      }
       const presentElements = new Set(turns);
       this.registry.values().forEach((state) => {
         if (!presentElements.has(state.element) || !state.element.isConnected) {
@@ -351,10 +438,10 @@
         this.measureTurn(state, height, viewportWidth, intrinsicBlockSize);
       });
 
-      if (rootChanged) {
+      if (rootChanged && !conversationChanged) {
         this.registry.values().forEach((state) => this.observeState(state));
       }
-      this.reconcileCount += 1;
+      this.recordCounter('reconcileCount');
       this.adapter.onStatsChange?.(this.getStats());
       return this.getStats();
     }
@@ -395,10 +482,17 @@
         ? stateOrElement
         : this.registry.getByElement(stateOrElement);
       if (!state) return;
+      const pinTimer = this.pinTimers.get(state);
+      if (pinTimer !== undefined) {
+        clearTimeout(pinTimer);
+        this.pinTimers.delete(state);
+      }
+      state.manualPinnedUntil = 0;
       this.warmObserver?.unobserve(state.layoutElement);
       this.activeObserver?.unobserve(state.layoutElement);
       this.resizeObserver?.unobserve(state.layoutElement);
       this.thawTurn(state);
+      this.markExtensionWrite(state.layoutElement);
       delete state.layoutElement.dataset.chcVirtualTurnId;
       this.registry.remove(state);
     }
@@ -420,7 +514,9 @@
       const state = stateOrElement?.element
         ? stateOrElement
         : this.registry.getByElement(stateOrElement);
-      if (!state || state.renderState === VIRTUAL_RENDER_STATES.FROZEN) return false;
+      if (!this.isStateCurrent(state) || state.renderState === VIRTUAL_RENDER_STATES.FROZEN) {
+        return false;
+      }
       const height = Number.isFinite(measuredHeight)
         ? measuredHeight
         : state.layoutElement.getBoundingClientRect().height;
@@ -446,11 +542,20 @@
       return Math.max(0, borderBoxHeight - blockExtras);
     }
 
+    markExtensionWrite(element) {
+      this.extensionWriteTargets.add(element);
+      setTimeout(() => this.extensionWriteTargets.delete(element), 0);
+    }
+
     freezeTurn(stateOrElement) {
       const state = stateOrElement?.element
         ? stateOrElement
         : this.registry.getByElement(stateOrElement);
-      if (!this.enabled || !state || state.renderState === VIRTUAL_RENDER_STATES.FROZEN) return false;
+      if (
+        !this.enabled ||
+        !this.isStateCurrent(state) ||
+        state.renderState === VIRTUAL_RENDER_STATES.FROZEN
+      ) return false;
       if (
         state.isPinned ||
         state.isStreaming ||
@@ -466,13 +571,15 @@
       state.lastMeasuredAt = cached.timestamp;
       state.viewportWidth = cached.viewportWidth;
       this.resizeObserver?.unobserve(state.layoutElement);
+      this.markExtensionWrite(state.layoutElement);
       state.layoutElement.style.setProperty(
         '--chc-intrinsic-height',
         `${Math.ceil(cached.intrinsicBlockSize)}px`
       );
+      state.layoutElement.dataset.chcFreezeStrategy = this.options.freezeStrategy;
       state.layoutElement.dataset.chcVirtualState = VIRTUAL_RENDER_STATES.FROZEN;
       state.renderState = VIRTUAL_RENDER_STATES.FROZEN;
-      this.freezeCount += 1;
+      this.recordCounter('freezeCount');
       this.adapter.onRenderStateChange?.(state);
       return true;
     }
@@ -484,18 +591,21 @@
       if (!state) return false;
       const wasFrozen = state.renderState === VIRTUAL_RENDER_STATES.FROZEN ||
         state.layoutElement.dataset.chcVirtualState === VIRTUAL_RENDER_STATES.FROZEN;
+      this.markExtensionWrite(state.layoutElement);
       delete state.layoutElement.dataset.chcVirtualState;
+      delete state.layoutElement.dataset.chcFreezeStrategy;
       state.layoutElement.style.removeProperty('--chc-intrinsic-height');
       state.renderState = nextState;
       if (this.enabled) this.resizeObserver?.observe(state.layoutElement);
       if (wasFrozen) {
-        this.thawCount += 1;
+        this.recordCounter('thawCount');
         this.adapter.onRenderStateChange?.(state);
       }
       return wasFrozen;
     }
 
     handleWarmEntries(entries) {
+      if (!this.enabled || this.destroyed) return;
       entries.forEach((entry) => {
         const state = this.registry.getByElement(entry.target);
         if (!state) return;
@@ -512,6 +622,7 @@
     }
 
     handleActiveEntries(entries) {
+      if (!this.enabled || this.destroyed) return;
       entries.forEach((entry) => {
         const state = this.registry.getByElement(entry.target);
         if (!state) return;
@@ -526,6 +637,7 @@
     }
 
     handleResizeEntries(entries) {
+      if (!this.enabled || this.destroyed) return;
       const viewportWidth = this.getViewportWidth();
       entries.forEach((entry) => {
         const state = this.registry.getByElement(entry.target);
@@ -535,38 +647,114 @@
           : entry.borderBoxSize;
         const height = borderBox?.blockSize || entry.contentRect.height;
         if (this.measureTurn(state, height, viewportWidth, entry.contentRect.height)) {
-          this.resizeCount += 1;
+          this.recordCounter('resizeCount');
           if (!state.warmIntersecting) this.freezeTurn(state);
         }
       });
     }
 
-    handleMutations(mutations) {
-      if (!this.enabled) return;
-      for (const mutation of mutations) {
-        const target = mutation.target?.nodeType === Node.ELEMENT_NODE
-          ? mutation.target
-          : mutation.target?.parentElement;
-        const state = this.registry.findForDescendant(target);
-        if (state?.renderState === VIRTUAL_RENDER_STATES.FROZEN) {
-          this.pinState(state, this.options.navigationPinMs);
-          this.thawTurn(state);
+    getElementForNode(node) {
+      if (!node) return null;
+      return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    }
+
+    isExtensionOwnedNode(node) {
+      const element = this.getElementForNode(node);
+      return Boolean(element?.matches?.(EXTENSION_OWNED_SELECTOR) ||
+        element?.closest?.(EXTENSION_OWNED_SELECTOR));
+    }
+
+    isExtensionOwnedMutation(mutation) {
+      if (mutation.type === 'attributes') {
+        if (mutation.attributeName?.startsWith('data-chc-')) return true;
+        if (mutation.attributeName === 'style' && this.extensionWriteTargets.has(mutation.target)) {
+          return true;
         }
       }
-      this.scheduleRefresh();
+      if (this.isExtensionOwnedNode(mutation.target)) return true;
+      if (mutation.type !== 'childList') return false;
+      const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+      return changedNodes.length > 0 && changedNodes.every((node) => this.isExtensionOwnedNode(node));
+    }
+
+    mutationCanAffectContent(mutation) {
+      if (mutation.type === 'characterData') {
+        return true;
+      }
+      if (mutation.type === 'attributes') {
+        return ['class', 'style', 'src', 'open', 'hidden', 'aria-expanded']
+          .includes(mutation.attributeName);
+      }
+      if (mutation.type !== 'childList') return false;
+      return [...mutation.addedNodes, ...mutation.removedNodes]
+        .some((node) => !this.isExtensionOwnedNode(node));
+    }
+
+    isCurrentContentTarget(node) {
+      const element = this.getElementForNode(node);
+      if (!element) return false;
+      if (element === this.thread) return true;
+      const turn = element.closest?.(TURN_SELECTOR);
+      return Boolean(turn && this.adapter.findTurnElements().includes(turn));
+    }
+
+    handleMutations(mutations) {
+      if (!this.enabled) return;
+      const statesToThaw = new Set();
+      let hasContentMutation = false;
+      for (const mutation of mutations) {
+        if (this.isExtensionOwnedMutation(mutation)) {
+          this.recordCounter('extensionMutationIgnoredCount');
+          continue;
+        }
+        if (!this.mutationCanAffectContent(mutation)) continue;
+        const target = this.getElementForNode(mutation.target);
+        const state = this.registry.findForDescendant(target);
+        if (!state && !this.isCurrentContentTarget(target)) continue;
+        hasContentMutation = true;
+        if (state?.renderState === VIRTUAL_RENDER_STATES.FROZEN) {
+          statesToThaw.add(state);
+        }
+      }
+      statesToThaw.forEach((state) => {
+        this.pinState(state, this.options.navigationPinMs);
+        this.recordCounter('mutationTriggeredThawCount');
+      });
+      if (hasContentMutation) this.scheduleRefresh('observer');
     }
 
     pinState(state, durationMs = this.options.navigationPinMs) {
-      if (!state) return;
+      if (!this.enabled || !this.isStateCurrent(state)) return false;
+      const previousTimer = this.pinTimers.get(state);
+      if (previousTimer !== undefined) clearTimeout(previousTimer);
+      const generation = this.lifecycleGeneration;
       state.manualPinnedUntil = Math.max(state.manualPinnedUntil, Date.now() + durationMs);
       this.thawTurn(state, state.activeIntersecting
         ? VIRTUAL_RENDER_STATES.ACTIVE
         : VIRTUAL_RENDER_STATES.WARM);
-      setTimeout(() => {
-        if (!this.enabled || state.manualPinnedUntil > Date.now()) return;
-        state.manualPinnedUntil = 0;
-        if (!state.warmIntersecting) this.freezeTurn(state);
+      const timer = setTimeout(() => {
+        if (this.pinTimers.get(state) === timer) this.pinTimers.delete(state);
+        if (!this.isGenerationCurrent(generation) || !this.isStateCurrent(state)) return;
+        if (state.manualPinnedUntil > Date.now()) {
+          this.pinState(state, state.manualPinnedUntil - Date.now());
+          return;
+        }
+        this.unpinState(state);
       }, durationMs + 20);
+      this.pinTimers.set(state, timer);
+      return true;
+    }
+
+    unpinState(state) {
+      if (!this.enabled || !this.isStateCurrent(state)) return false;
+      const timer = this.pinTimers.get(state);
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        this.pinTimers.delete(state);
+      }
+      state.manualPinnedUntil = 0;
+      if (!state.warmIntersecting) this.freezeTurn(state);
+      return true;
     }
 
     async prepareForNavigation(turnElement) {
@@ -584,10 +772,16 @@
       const end = Math.min(states.length, stateIndex + this.options.navigationNeighborTurns + 1);
       const targets = states.slice(start, end);
       targets.forEach((target) => this.pinState(target));
+      const generation = this.lifecycleGeneration;
       await nextAnimationFrame();
       await nextAnimationFrame();
+      if (!this.isGenerationCurrent(generation)) return;
       const viewportWidth = this.getViewportWidth();
-      targets.forEach((target) => this.measureTurn(target, undefined, viewportWidth));
+      targets.forEach((target) => {
+        if (this.isStateCurrent(target)) {
+          this.measureTurn(target, undefined, viewportWidth);
+        }
+      });
     }
 
     isTurnRenderedForEnhancement(turnElement) {
@@ -596,9 +790,43 @@
       return !state || state.renderState !== VIRTUAL_RENDER_STATES.FROZEN;
     }
 
+    captureResizeAnchor() {
+      const states = this.registry.values().sort((a, b) => a.index - b.index);
+      if (states.length === 0) return null;
+      const documentRoot = isDocumentScrollRoot(this.scrollRoot);
+      const rootRect = documentRoot
+        ? { top: 0, bottom: window.innerHeight }
+        : this.scrollRoot.getBoundingClientRect();
+      const state = states.find((candidate) => {
+        const rect = candidate.layoutElement.getBoundingClientRect();
+        return rect.bottom > rootRect.top + 80 && rect.top < rootRect.bottom;
+      });
+      if (!state) return null;
+      return {
+        state,
+        offset: state.layoutElement.getBoundingClientRect().top - rootRect.top
+      };
+    }
+
+    restoreResizeAnchor(anchor) {
+      if (!this.isStateCurrent(anchor?.state)) return;
+      const documentRoot = isDocumentScrollRoot(this.scrollRoot);
+      const rootTop = documentRoot ? 0 : this.scrollRoot.getBoundingClientRect().top;
+      const currentOffset = anchor.state.layoutElement.getBoundingClientRect().top - rootTop;
+      const delta = currentOffset - anchor.offset;
+      if (!Number.isFinite(delta) || Math.abs(delta) < 0.5) return;
+      if (documentRoot) {
+        window.scrollBy({ top: delta, left: 0, behavior: 'auto' });
+      } else {
+        this.scrollRoot.scrollTop = (Number(this.scrollRoot.scrollTop) || 0) + delta;
+      }
+    }
+
     onWindowResize() {
       if (!this.enabled) return;
       if (this.resizeTimer !== null) clearTimeout(this.resizeTimer);
+      const generation = this.lifecycleGeneration;
+      if (!this.pendingResizeAnchor) this.pendingResizeAnchor = this.captureResizeAnchor();
       this.registry.values().forEach((state) => this.thawTurn(state));
       this.heightCache.clear();
       this.registry.values().forEach((state) => {
@@ -607,17 +835,27 @@
       });
       this.resizeTimer = setTimeout(() => {
         this.resizeTimer = null;
-        this.refresh();
+        requestAnimationFrame(() => {
+          if (!this.isGenerationCurrent(generation)) return;
+          const anchor = this.pendingResizeAnchor;
+          this.pendingResizeAnchor = null;
+          this.restoreResizeAnchor(anchor);
+          this.refresh();
+          requestAnimationFrame(() => {
+            if (this.isGenerationCurrent(generation)) this.restoreResizeAnchor(anchor);
+          });
+        });
       }, this.options.resizeDebounceMs);
     }
 
     onResourceLoad(event) {
       if (!this.enabled) return;
       const target = event.target;
-      if (!target?.matches?.('img, picture, video')) return;
+      if (!target?.matches?.('img, video, source')) return;
       const state = this.registry.findForDescendant(target);
       if (state?.renderState === VIRTUAL_RENDER_STATES.FROZEN) {
         this.pinState(state, this.options.navigationPinMs);
+        this.recordCounter('resourceTriggeredThawCount');
       }
     }
 
@@ -640,6 +878,7 @@
       if (!PerformanceObserver.supportedEntryTypes?.includes('longtask')) return;
       try {
         this.longTaskObserver = new PerformanceObserver((list) => {
+          if (!this.enabled || this.destroyed || !this.debugEnabled) return;
           list.getEntries().forEach((entry) => {
             this.longTaskStats.count += 1;
             this.longTaskStats.totalDuration += entry.duration;
@@ -661,6 +900,7 @@
       const states = this.registry.values();
       return {
         enabled: this.enabled,
+        freezeStrategy: this.options.freezeStrategy,
         registeredTurns: states.length,
         activeTurns: states.filter((state) => state.renderState === VIRTUAL_RENDER_STATES.ACTIVE).length,
         warmTurns: states.filter((state) => state.renderState === VIRTUAL_RENDER_STATES.WARM).length,
@@ -669,8 +909,13 @@
         unsupportedReason: this.unsupportedReason,
         freezeCount: this.freezeCount,
         thawCount: this.thawCount,
+        mutationTriggeredThawCount: this.mutationTriggeredThawCount,
+        resourceTriggeredThawCount: this.resourceTriggeredThawCount,
+        observerTriggeredRefreshCount: this.observerTriggeredRefreshCount,
+        extensionMutationIgnoredCount: this.extensionMutationIgnoredCount,
         resizeCount: this.resizeCount,
-        reconcileCount: this.reconcileCount
+        reconcileCount: this.reconcileCount,
+        maxTurnsProcessedPerReconcile: this.maxTurnsProcessedPerReconcile
       };
     }
 
